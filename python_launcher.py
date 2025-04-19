@@ -9,6 +9,7 @@ import statistics
 from PIL import Image
 import time
 from multiprocessing import Manager
+import numpy as np
 
 def bresenham(p1, p2):
     """
@@ -69,9 +70,6 @@ def agent(targets, visibility_queue, agent_id, grid,points):
 
     
     visibility_queue.put(vision_dict)
-    
-
-
 
 def split_into_n(points: List[Any], n: int) -> List[List[Any]]:
     total = len(points)
@@ -86,12 +84,6 @@ def split_into_n(points: List[Any], n: int) -> List[List[Any]]:
         result.append(group)
         start += size
     return result
-
-def print_square(num):
-    """
-    function to print square of given num
-    """
-    print("Square: {}".format(num * num))
 
 def worker_pool(image_name,subsub,image_folder_path,num_agents,number_runs):
     total_run_times = []
@@ -144,6 +136,11 @@ def worker_pool(image_name,subsub,image_folder_path,num_agents,number_runs):
     print()
     print(statistics.mean(total_run_times))
     print()
+    full_data = [statistics.mean(total_run_times)] + total_run_times
+    csv_path = image_folder_path + "/" + subsub + "/" + image_name
+    csv_path = csv_path[:-4]
+    csv_path += "_data.csv"
+    np.savetxt(csv_path, full_data, delimiter=",")
 
 root_dir = "rust_data"
 
@@ -153,7 +150,7 @@ if __name__ == '__main__':
     thread_averages = []
     manager = multiprocessing.Manager()
 
-    for thread_count in [1,2,4,8,16]:
+    for thread_count in [16,8,4,2,1]:
         times = {}
 
         for subfolder in os.listdir(root_dir):
@@ -169,8 +166,7 @@ if __name__ == '__main__':
                         for file in os.listdir(subsub_path):
                             if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp', '.tiff')):
                                 
-                                worker_pool(file,subsub,subfolder_path,num_agents=1,number_runs=10)
-                                #worker_pool(file,subsub,subfolder_path,num_agents=thread_count,number_runs=10)
+                                worker_pool(file,subsub,subfolder_path,num_agents=thread_count,number_runs=5)
         values = []
         for key in times.keys():
             average = statistics.mean(times[key])
