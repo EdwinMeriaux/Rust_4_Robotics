@@ -10,8 +10,9 @@
 #include <json-c/json.h>
 #include <time.h>
 
-#define MAX_PATH 1024
+#define MAX_PATH 4096
 #define MAX_THREADS 32
+#define NUM_RUNS 5
 
 int width, height;
 
@@ -67,6 +68,13 @@ uint8_t** binarize_png_to_matrix(const char *filename) {
     free(rows);
     png_destroy_read_struct(&png, &info, NULL);
     return mat;
+}
+
+void free_binary_img(uint8_t **binary_img) {
+    for (int y = 0; y < height; y++) {
+        free(binary_img[y]);
+    }
+    free(binary_img);
 }
 
 int bresenham_can_see(uint8_t **binary, int x1, int y1, int x2, int y2) {
@@ -127,136 +135,145 @@ double get_time_diff(struct timespec start, struct timespec end) {
     return (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
 }
 
+void run_threads_on_image(const char *filePath, int numThreads) {
+    uint8_t **binary_img = binarize_png_to_matrix(filePath);
+    if (!binary_img) return;
+
+    pthread_t threads[MAX_THREADS];
+    ThreadArgs *args_array[MAX_THREADS];  // Track args for later free
+    global_visibility_map = json_object_new_object();
+
+    int num_points = width * height;
+    int chunk_size = num_points / numThreads;
+
+    for (int i = 0; i < numThreads; i++) {
+        args_array[i] = malloc(sizeof(ThreadArgs)); // Track it
+        args_array[i]->binary_img = binary_img;
+        args_array[i]->start = i * chunk_size;
+        args_array[i]->end = (i == numThreads - 1) ? num_points : (i + 1) * chunk_size;
+        pthread_create(&threads[i], NULL, thread_worker, args_array[i]);
+    }
+
+    for (int i = 0; i < numThreads; i++) {
+        pthread_join(threads[i], NULL);
+        free(args_array[i]);  // ✅ FREE the malloc'ed args
+    }
+
+    // Output to JSON
+    const char *filename = strrchr(filePath, '/');
+    filename = filename ? filename + 1 : filePath;
+
+    char jsonPath[MAX_PATH];
+    snprintf(jsonPath, sizeof(jsonPath), "json_output/%s", filename);
+    jsonPath[strlen(jsonPath) - 4] = '\0';  // remove .png
+    strcat(jsonPath, ".json");
+
+    FILE *fout = fopen(jsonPath, "w");
+    if (fout) {
+        fputs(json_object_to_json_string_ext(global_visibility_map, JSON_C_TO_STRING_PRETTY), fout);
+        fclose(fout);
+    } else {
+        perror("Failed to write JSON file");
+    }
+
+
+    json_object_put(global_visibility_map);
+    free_binary_img(binary_img);
+}
+
 
 
 int main(int argc, char *argv[]) {
-    if (argc != 2) {
-        printf("Usage: %s <num_threads>\n", argv[0]);
-        return 1;
-    }
-
-    int numThreads = atoi(argv[1]);
-    if (numThreads <= 0 || numThreads > MAX_THREADS) numThreads = 4;
-
-    const char *inputDir = "../dungeons_small";
-    const char *jsonOutputDir = "./json_output";
-    mkdir(jsonOutputDir, 0777);
-
-    char timing_filename[MAX_PATH];
-
-    // Extract folder name from inputDir
-    const char *folder_name = strrchr(inputDir, '/');
-    folder_name = (folder_name) ? folder_name + 1 : inputDir;
-
-    // Compose filename with folder and thread info
-    snprintf(timing_filename, sizeof(timing_filename),
-             "timing_results_%s_threads%d.txt", folder_name, numThreads);
-
-    FILE *timing_file = fopen(timing_filename, "w");
 
 
-    fprintf(timing_file, "FileName,AverageTimeSeconds\n");
+    const char *inputDir = "../rust_data";
+    mkdir("json_output", 0777);
 
 
-    DIR *d = opendir(inputDir);
-    struct dirent *entry;
-    int totalFiles = 0;
+    int thread_counts[] = {16, 8, 4, 2, 1};
 
-    while ((entry = readdir(d))) {
-    if (strstr(entry->d_name, ".png")) {
-        char filePath[MAX_PATH];
-        snprintf(filePath, sizeof(filePath), "%s/%s", inputDir, entry->d_name);
+    int num_thread_counts = sizeof(thread_counts) / sizeof(thread_counts[0]);
 
-        double total_time = 0.0;
+    for (int i= 0; i<  num_thread_counts; i++){
+        int numThreads = thread_counts[i];
+        
+        DIR *d = opendir(inputDir);
 
-        for (int run = 0; run < 5; run++) {
-            struct timespec start, end;
-            clock_gettime(CLOCK_MONOTONIC, &start);
+        struct dirent *subfolder;
 
-            uint8_t **binary_img = binarize_png_to_matrix(filePath);
-            if (!binary_img) continue;
+        while ((subfolder = readdir(d)) != NULL) {
+            if (strcmp(subfolder->d_name, ".") == 0 || strcmp(subfolder->d_name, "..") == 0)
+                continue;
 
-            pthread_t threads[MAX_THREADS];
-            global_visibility_map = json_object_new_object();
 
-            int num_points = width * height;
-            int chunk_size = num_points / numThreads;
+            char subfolder_path[MAX_PATH];
+            snprintf(subfolder_path, sizeof(subfolder_path), "%s/%s", inputDir, subfolder->d_name);
 
-            for (int i = 0; i < numThreads; i++) {
-                int start_idx = i * chunk_size;
-                int end_idx = (i == numThreads - 1) ? num_points : (i + 1) * chunk_size;
 
-                ThreadArgs *args = malloc(sizeof(ThreadArgs));
-                args->binary_img = binary_img;
-                args->start = start_idx;
-                args->end = end_idx;
-                pthread_create(&threads[i], NULL, thread_worker, args);
+            struct stat statbuf;
+            if (stat(subfolder_path, &statbuf) == 0 && S_ISDIR(statbuf.st_mode)) {
+                DIR *d2 = opendir(subfolder_path);
+                if (!d2) continue;
+
+                struct dirent *subsub;
+                while ((subsub = readdir(d2)) != NULL) {
+                    if (strcmp(subsub->d_name, ".") == 0 || strcmp(subsub->d_name, "..") == 0)
+                        continue;
+
+                    char subsub_path[MAX_PATH];
+                    snprintf(subsub_path, sizeof(subsub_path), "%s/%s", subfolder_path, subsub->d_name);
+
+                    if (stat(subsub_path, &statbuf) == 0 && S_ISDIR(statbuf.st_mode)) {
+
+                        //Open the subsubfolder and process the PNG files
+                        DIR *d3 = opendir(subsub_path);
+                        struct dirent *entry;
+                        while ((entry = readdir(d3)) != NULL) {
+                            if (strstr(entry->d_name, ".png")) {
+                                char filePath[MAX_PATH];
+                                snprintf(filePath, sizeof(filePath), "%s/%s", subsub_path, entry->d_name);
+
+                                double total_time = 0.0;
+
+                                for (int run = 0; run < NUM_RUNS; run++) {
+                                    struct timespec start, end;
+                                    clock_gettime(CLOCK_MONOTONIC, &start);
+                                    run_threads_on_image(filePath, numThreads);
+                                    clock_gettime(CLOCK_MONOTONIC, &end);
+                                    total_time += get_time_diff(start, end);
+                                }
+
+                                double avg_time = total_time / NUM_RUNS;
+
+                                // Get the name of the entry before the .png extension
+                                char *entry_name = strrchr(entry->d_name, '.');
+                                if (entry_name) {
+                                    *entry_name = '\0'; // Remove the .png extension
+                                }
+
+                                // write the average time to a file in the subsubfolder
+                                char timing_filename[MAX_PATH];
+                                snprintf(timing_filename, sizeof(timing_filename),
+                                         "%s/timing_results_c_%s_%s_threads%d.txt", subsub_path, subfolder->d_name, entry->d_name, numThreads);
+                                FILE *timing_file = fopen(timing_filename, "w");
+                                if (timing_file) {
+                                    fprintf(timing_file, "%.6f\n", avg_time);
+                                    fclose(timing_file);
+                                } else {
+                                    perror("Failed to write timing file");
+                                }
+                            }
+                        }
+
+                    closedir(d3);
+                    }
+                
+                }
+                closedir(d2);
             }
-
-            for (int i = 0; i < numThreads; i++)
-                pthread_join(threads[i], NULL);
-
-            // Clean up binary image
-            for (int y = 0; y < height; y++)
-                free(binary_img[y]);
-            free(binary_img);
-
-            json_object_put(global_visibility_map);
-
-            clock_gettime(CLOCK_MONOTONIC, &end);
-            total_time += get_time_diff(start, end);
         }
-
-        double avg_time = total_time / 5.0;
-        fprintf(timing_file, "%s:%.6f\n", entry->d_name, avg_time);
-
-        // One final run to save the actual JSON output
-        uint8_t **binary_img = binarize_png_to_matrix(filePath);
-        if (!binary_img) continue;
-
-        pthread_t threads[MAX_THREADS];
-        global_visibility_map = json_object_new_object();
-        int num_points = width * height;
-        int chunk_size = num_points / numThreads;
-
-        for (int i = 0; i < numThreads; i++) {
-            int start_idx = i * chunk_size;
-            int end_idx = (i == numThreads - 1) ? num_points : (i + 1) * chunk_size;
-
-            ThreadArgs *args = malloc(sizeof(ThreadArgs));
-            args->binary_img = binary_img;
-            args->start = start_idx;
-            args->end = end_idx;
-            pthread_create(&threads[i], NULL, thread_worker, args);
-        }
-
-        for (int i = 0; i < numThreads; i++)
-            pthread_join(threads[i], NULL);
-
-        char jsonPath[MAX_PATH];
-        snprintf(jsonPath, sizeof(jsonPath), "%s/%s", jsonOutputDir, entry->d_name);
-        jsonPath[strlen(jsonPath) - 4] = '\0'; // remove .png
-        strcat(jsonPath, ".json");
-
-        FILE *fout = fopen(jsonPath, "w");
-        if (fout) {
-            fputs(json_object_to_json_string_ext(global_visibility_map, JSON_C_TO_STRING_PRETTY), fout);
-            fclose(fout);
-        } else {
-            perror("Failed to write JSON file");
-        }
-
-        for (int y = 0; y < height; y++)
-            free(binary_img[y]);
-        free(binary_img);
-
-        json_object_put(global_visibility_map);
-        totalFiles++;
+        closedir(d);
     }
-}
 
-    fclose(timing_file);
-    closedir(d);
-    printf("Processed %d PNG files\n", totalFiles);
     return 0;
 }
