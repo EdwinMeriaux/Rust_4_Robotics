@@ -51,8 +51,8 @@ def agent(targets, visibility_queue, agent_id, grid,points):
     target_num = 0
     vision_dict = {}
     for target in targets:
-        if target_num % 100 == 0:
-            print(target_num, "/", len(targets))
+        #if target_num % 100 == 0:
+        #    print(target_num, "/", len(targets))
         for point in points:
             line = bresenham(point,target)
             
@@ -87,7 +87,7 @@ def split_into_n(points: List[Any], n: int) -> List[List[Any]]:
 
 def worker_pool(image_name,subsub,image_folder_path,num_agents,number_runs):
     total_run_times = []
-
+    print(image_folder_path + "/" + subsub + "/" + image_name + "_" + str(num_agents))
     for run in range(number_runs):
 
         start_time = time.time()
@@ -105,7 +105,7 @@ def worker_pool(image_name,subsub,image_folder_path,num_agents,number_runs):
 
         
         broken_tasks = split_into_n(all_points, num_agents)
-        print(f"Total tasks: {len(broken_tasks)}")  # Remark the total number: easier for debug later
+        #print(f"Total tasks: {len(broken_tasks)}")  # Remark the total number: easier for debug later
 
         visibility_queue = manager.Queue()
 
@@ -150,7 +150,7 @@ if __name__ == '__main__':
     thread_averages = []
     manager = multiprocessing.Manager()
 
-    for thread_count in [16,8,4,2,1]:
+    for thread_count in [8,4,2,1]:
         times = {}
 
         for subfolder in os.listdir(root_dir):
