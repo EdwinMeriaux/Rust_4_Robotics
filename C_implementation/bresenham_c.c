@@ -10,7 +10,7 @@
 #include <json-c/json.h>
 #include <time.h>
 
-#define MAX_PATH 4096
+#define MAX_PATH 512
 #define MAX_THREADS 32
 #define NUM_RUNS 5
 
@@ -62,20 +62,16 @@ uint8_t** binarize_png_to_matrix(const char *filename) {
             //printf("px[0]: %d, px[1]: %d, px[2]: %d\n", px[0], px[1], px[2]);
             mat[y][x] = (px[0] == 255 && px[1] == 255 && px[2] == 255) ? 0 : 1;
         }
-        free(row);
     }
+
+    for (int y = 0; y < height; y++)
+        free(rows[y]);
 
     free(rows);
     png_destroy_read_struct(&png, &info, NULL);
     return mat;
 }
 
-void free_binary_img(uint8_t **binary_img) {
-    for (int y = 0; y < height; y++) {
-        free(binary_img[y]);
-    }
-    free(binary_img);
-}
 
 int bresenham_can_see(uint8_t **binary, int x1, int y1, int x2, int y2) {
     int dx = abs(x2 - x1), dy = abs(y2 - y1);
@@ -156,7 +152,7 @@ void run_threads_on_image(const char *filePath, int numThreads) {
 
     for (int i = 0; i < numThreads; i++) {
         pthread_join(threads[i], NULL);
-        free(args_array[i]);  // ✅ FREE the malloc'ed args
+        free(args_array[i]);  
     }
 
     // Output to JSON
@@ -176,9 +172,14 @@ void run_threads_on_image(const char *filePath, int numThreads) {
         perror("Failed to write JSON file");
     }
 
+    // Free binary image
+    for (int i = 0; i < height; i++) {
+        free(binary_img[i]);
+    }
+    free(binary_img);
+    // Free JSON object
 
     json_object_put(global_visibility_map);
-    free_binary_img(binary_img);
 }
 
 
@@ -190,7 +191,7 @@ int main(int argc, char *argv[]) {
     mkdir("json_output", 0777);
 
 
-    int thread_counts[] = {16, 8, 4, 2, 1};
+    int thread_counts[] = {16};
 
     int num_thread_counts = sizeof(thread_counts) / sizeof(thread_counts[0]);
 
@@ -265,13 +266,18 @@ int main(int argc, char *argv[]) {
                             }
                         }
 
+                        free(entry);
+
+
                     closedir(d3);
                     }
                 
                 }
+                free(subsub);
                 closedir(d2);
             }
         }
+        free(subfolder);
         closedir(d);
     }
 
